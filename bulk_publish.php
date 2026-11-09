@@ -1,0 +1,21 @@
+<?php
+require_once 'auth.php';require_role(['super_admin','registrar']);require_once 'db.php';
+$message='';$type='error';
+if($_SERVER['REQUEST_METHOD']==='POST'){
+ try {
+
+ if(!verify_csrf())$message='Invalid request.';else{
+  $batch=trim($_POST['batch']??'');$section=$_POST['section']??'ALL';$year=(string)($_POST['year']??'');$sem=(string)($_POST['semester']??'');$from=$_POST['from_status']??'draft';$to=$_POST['to_status']??'published';
+  if(!preg_match('/^\d{2}$/',$batch)||!in_array($section,['ALL','PS','BS'],true)||!valid_year_semester($year,$sem)||!in_array($from,['draft','withheld'],true)||$to!=='published')$message='Invalid filter or status values.';
+  else{
+   if(semester_is_locked($conn,$year,$sem,$batch,$section)){ $message='This semester is locked. Publication changes are disabled.'; } else {
+   if($section==='ALL'){$sql="UPDATE results r JOIN students s ON s.student_id=r.student_id SET r.publish_status=? WHERE s.batch=? AND r.year=? AND r.semester=? AND r.publish_status=? AND r.approval_status='approved'";$u=mysqli_prepare($conn,$sql);mysqli_stmt_bind_param($u,'sssss',$to,$batch,$year,$sem,$from);}
+   else{$sql="UPDATE results r JOIN students s ON s.student_id=r.student_id SET r.publish_status=? WHERE s.batch=? AND s.section=? AND r.year=? AND r.semester=? AND r.publish_status=? AND r.approval_status='approved'";$u=mysqli_prepare($conn,$sql);mysqli_stmt_bind_param($u,'ssssss',$to,$batch,$section,$year,$sem,$from);}
+   mysqli_stmt_execute($u);$count=mysqli_stmt_affected_rows($u);$vr=mysqli_prepare($conn, $section==='ALL'?'SELECT student_id FROM students WHERE batch=?':'SELECT student_id FROM students WHERE batch=? AND section=?');if($section==='ALL')mysqli_stmt_bind_param($vr,'s',$batch);else mysqli_stmt_bind_param($vr,'ss',$batch,$section);mysqli_stmt_execute($vr);$vrs=mysqli_stmt_get_result($vr);while($vx=mysqli_fetch_assoc($vrs))revoke_student_verifications($conn,$vx['student_id']);audit_log($conn,'RESULT_PUBLISHED','result','',$count.' results '.$from.' -> '.$to.' for batch '.$batch.' '.$section.' Y'.$year.'S'.$sem);$message="$count approved results updated to ".result_status_label($to).'.';$type='success';
+   }
+  }
+ }
+
+ } catch(mysqli_sql_exception $ex) { mysqli_rollback($conn); $message='This change could not be saved. The record may be locked, protected or changed by another user. Refresh and try again.'; $type='error'; }
+}
+?><!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bulk Publish</title><link rel="icon" href="favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="modern-ui.css?v=20261006-modern2"></head><body><div class="main-wrapper"><?php include 'admin_nav.php';?><main class="content"><section class="page-heading"><div><span class="page-kicker">Publication Control</span><h1>Publish Approved Results</h1><p>Publish approved drafts or withheld results. Published results must be reopened individually with a reason.</p></div></section><section class="feature-card"><form method="post" onsubmit="return confirm('Apply this status change to all matching results?');"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><div class="form-grid-3"><div><label>Batch</label><input name="batch" pattern="\d{2}" maxlength="2" required placeholder="25"></div><div><label>Section</label><select name="section"><option value="ALL">All</option><option value="PS">PS</option><option value="BS">BS</option></select></div><div><label>Year</label><select name="year"><?php for($i=1;$i<=4;$i++):?><option value="<?=$i?>">Year <?=$i?></option><?php endfor;?></select></div></div><div class="form-grid-3"><div><label>Semester</label><select name="semester"><option value="1">Semester 1</option><option value="2">Semester 2</option></select></div><div><label>From</label><select name="from_status"><option value="draft">Draft</option><option value="withheld">Withheld</option></select></div><div><label>To</label><select name="to_status"><option value="published">Published</option></select></div></div><div class="button-row"><input type="submit" value="Apply Bulk Status"></div></form><?php if($message):?><div class="message <?=$type?>"><?=e($message)?></div><?php endif;?></section></main><?php include 'footer.php';?></div></body></html>

@@ -1,0 +1,19 @@
+<?php
+require_once 'db.php'; require_once 'functions.php';
+$message='';$type='error';
+if($_SERVER['REQUEST_METHOD']==='POST'){
+ $sid=strtoupper(trim($_POST['student_id']??''));$idx=strtoupper(trim($_POST['index_number']??''));$nic=normalize_nic($_POST['nic_number']??'');
+ if(!verify_csrf())$message='Invalid request. Please try again.';
+ elseif(!consume_reset_attempt($conn,$sid,$_SERVER['REMOTE_ADDR']??'')){$message='Too many requests. Please wait 15 minutes before trying again.';http_response_code(429);}
+ elseif(!valid_student_id($sid)||!valid_index_number($idx)||!valid_nic($nic))$message='The supplied details could not be verified.';
+ else{
+  $s=mysqli_prepare($conn,'SELECT student_id,nic_hash FROM students WHERE student_id=? AND index_number=? AND is_active=1 LIMIT 1');mysqli_stmt_bind_param($s,'ss',$sid,$idx);mysqli_stmt_execute($s);$r=mysqli_fetch_assoc(mysqli_stmt_get_result($s));
+  if(!$r || empty($r['nic_hash']) || !password_verify($nic,$r['nic_hash'])){$message='The supplied details could not be verified.';}
+  else{
+   $p=mysqli_prepare($conn,"SELECT id FROM pin_reset_requests WHERE student_id=? AND status='pending' LIMIT 1");mysqli_stmt_bind_param($p,'s',$sid);mysqli_stmt_execute($p);
+   if(mysqli_num_rows(mysqli_stmt_get_result($p))>0){$message='A PIN reset request is already pending for this account.';$type='success';}
+   else{$ip=$_SERVER['REMOTE_ADDR']??'';$i=mysqli_prepare($conn,'INSERT INTO pin_reset_requests(student_id,index_number,status,note,request_ip) VALUES (?,? ,\'pending\',?,?)');$note='Identity verified using NIC. Request IP: '.$ip;mysqli_stmt_bind_param($i,'ssss',$sid,$idx,$note,$ip);if(mysqli_stmt_execute($i)){$message='Identity verified. Your PIN reset request has been submitted for administrator review.';$type='success';}else$message='Could not submit the request.';}
+  }
+ }
+}
+?><!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Forgot PIN</title><link rel="icon" href="favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="modern-ui.css?v=20261006-modern2"></head><body class="auth-page"><div class="main-wrapper"><?php include 'public_header.php';?><main class="auth-shell"><section class="auth-side student-auth-side"><span class="page-kicker">Student Access</span><h1>Secure PIN<br>recovery.</h1><p>Verify your Student ID, Index Number and NIC. A successful verification only creates a request; an authorized administrator must still approve and reset the PIN.</p><div class="field-hint" style="color:rgba(255,255,255,.78);margin-top:18px">Your NIC is never displayed and is stored only as a secure hash for verification.</div></section><section class="auth-card"><div class="auth-card-head"><div class="auth-icon">ID</div><div><span>Identity verification</span><h2>Forgot PIN</h2></div></div><form method="post" class="auth-form" autocomplete="off"><input type="hidden" name="csrf_token" value="<?=e(csrf_token())?>"><label>Student ID</label><input name="student_id" required placeholder="SEU/IS/00/PS/000" autocomplete="off"><label>Index Number</label><input name="index_number" required placeholder="PS-0001" autocomplete="off"><label>NIC Number</label><input name="nic_number" required maxlength="14" placeholder="200012345678 or 901234567V" autocomplete="off" spellcheck="false"><div class="field-hint">Enter the NIC registered with your student account.</div><div class="button-row"><a href="login.php" class="btn-link btn-secondary">Back</a><input type="submit" value="Verify & Request Reset"></div></form><?php if($message):?><div class="message <?=$type?>"><?=e($message)?></div><?php endif;?></section></main><?php include 'footer.php';?></div></body></html>
